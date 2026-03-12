@@ -1,31 +1,35 @@
 import os
 import numpy as np
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
-model = load_model('person_identifier_model.h5')
-IMG_SIZE = (128, 128)
-label_map = {0: 'Normal', 1: 'Abnormal'}
-TEST_DIR = 'C:/Users/Admin/OneDrive/Desktop/MachineLearning/dataset/test'
-test_images = [os.path.join(TEST_DIR, fname) 
-               for fname in os.listdir(TEST_DIR) 
-               if fname.lower().endswith(('.jpg', '.jpeg', '.png'))]
-TEST_DIR = 'C:/Users/Admin/OneDrive/Desktop/MachineLearning/dataset/test'
-
-# Get all image paths in test folder
-test_images = [os.path.join(TEST_DIR, fname) 
-               for fname in os.listdir(TEST_DIR) 
-               if fname.lower().endswith(('.jpg', '.jpeg', '.png'))]
-def predict_person(img_path):
-    img = image.load_img(img_path, target_size=IMG_SIZE)
-    img_array = image.img_to_array(img)
-    img_array = img_array / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-
-    prediction = model.predict(img_array)[0][0]
-    label = 1 if prediction > 0.5 else 0
-    confidence = prediction if label == 1 else 1 - prediction
-    return label_map[label], confidence
-
-for img_path in test_images:
-    predicted_person, conf = predict_person(img_path)
-    print(f"{os.path.basename(img_path)} → Predicted: {predicted_person} (Confidence: {conf:.2f})")
+import tensorflow as tf
+from keras.models import load_model
+import numpy as np
+def loadnpredict():
+    model=load_model(path)
+    files = [f for f in os.listdir(test) if f.endswith('.npy')]
+    if not files:
+        print("No .npy files found in the directory.")
+        return
+    print(f"Found {len(files)} files. Starting inference...\n")
+    print(f"{'File Name':<30} | {'Raw Score':<12} | {'Prediction'}")
+    print("-" * 60)
+    for filename in files:
+        filepath=os.path.join(test,filename)
+        data=np.load(filepath)
+      def batch_predict():
+    if not os.path.exists(path):
+        print("Model file not found.")
+        return    
+    model = load_model(path)
+    files = [f for f in os.listdir(test) if f.endswith('.npy')]
+    for file_name in files :
+        data = np.load(os.path.join(test, file_name))
+    
+        input_data = data[..., np.newaxis] 
+        print(np.shape(input_data))
+        predictions=model.predict(input_data,verbose=0)
+        binary_preds = (predictions > threshold).astype(int)
+        abnormal_count = np.sum(binary_preds)
+        print(f"--- File: {file_name} ---")
+        print(f"Overall File Status: {'ABNORMAL' if abnormal_count > 0 else 'NORMAL'}\n")
+      if __name__ == "__main__":
+    batch_predict()
