@@ -1,6 +1,0 @@
-# Healthcare Assistant - Raspberry Pi 4B
-# Install with: pip install -r requirements.txt --break-system-packages
-
-smbus2>=0.4.3       # I2C communication (MAX30102, MLX90614)
-spidev>=3.6         # SPI communication (MCP3008 for AD8232 ECG)
-RPi.GPIO>=0.7.1     # GPIO for AD8232 leads-off detection
