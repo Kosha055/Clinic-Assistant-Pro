@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Healthcare Assistant - Raspberry Pi 4B
-Sensors: MAX30102 (SpO2/HR), MLX90614 (Temperature), AD8232 (ECG)
+Sensors: MAX30102 (SpO2/HR), MLX90614 (Temperature), AD8232 via ADS1115 (ECG)
 Display: LCD35 3.5" TFT via framebuffer
 """
 
@@ -12,10 +12,10 @@ from datetime import datetime
 
 from sensors.max30102_sensor import MAX30102Sensor
 from sensors.mlx90614_sensor import MLX90614Sensor
-from sensors.ad8232_sensor import AD8232Sensor
-from data.data_logger import DataLogger
-from alerts.alert_manager import AlertManager
-from display.lcd35_display import LCD35Display
+from sensors.ad8232_sensor   import AD8232Sensor
+from data.data_logger         import DataLogger
+from alerts.alert_manager     import AlertManager
+from display.lcd35_display    import LCD35Display
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,37 +33,37 @@ class HealthcareAssistant:
         logger.info("Initializing Healthcare Assistant...")
 
         # Sensors
-        self.max30102  = MAX30102Sensor()
-        self.mlx90614  = MLX90614Sensor()
-        self.ad8232    = AD8232Sensor()
+        self.max30102 = MAX30102Sensor()
+        self.mlx90614 = MLX90614Sensor()
+        self.ad8232   = AD8232Sensor()      # Now uses ADS1115 via I2C
 
         # Support modules
         self.data_logger   = DataLogger()
         self.alert_manager = AlertManager()
 
-        # LCD35 display  — change /dev/fb1 to /dev/fb0 if needed
+        # LCD35 display — change /dev/fb1 to /dev/fb0 if needed
         self.lcd = LCD35Display(fb_device="/dev/fb1")
 
         # Control
         self.running         = False
         self.readings        = {}
-        self.vitals_interval = 5      # seconds
-        self.ecg_interval    = 0.01   # ~100 Hz
+        self.vitals_interval = 5       # seconds between SpO2/HR/Temp reads
+        self.ecg_interval    = 1.0 / 860  # ADS1115 max 860 SPS
 
-    # ── Sensor Threads ───────────────────────────────────────────────────────
+    # ── Sensor Threads ────────────────────────────────────────────────────────
 
     def read_vitals(self):
         """Read SpO2, Heart Rate, Temperature every 5 seconds."""
         while self.running:
             try:
-                hr, spo2           = self.max30102.read()
-                temp_obj, temp_amb = self.mlx90614.read()
+                hr,   spo2     = self.max30102.read()
+                temp, temp_amb = self.mlx90614.read()
 
                 self.readings = {
                     'timestamp':    datetime.now().isoformat(),
                     'heart_rate':   hr,
                     'spo2':         spo2,
-                    'body_temp':    temp_obj,
+                    'body_temp':    temp,
                     'ambient_temp': temp_amb,
                 }
 
@@ -73,7 +73,7 @@ class HealthcareAssistant:
 
                 logger.info(
                     f"HR={hr} bpm | SpO2={spo2}% | "
-                    f"Temp={temp_obj}°C | Ambient={temp_amb}°C"
+                    f"Temp={temp}°C | Ambient={temp_amb}°C"
                 )
 
             except Exception as e:
@@ -82,7 +82,7 @@ class HealthcareAssistant:
             time.sleep(self.vitals_interval)
 
     def read_ecg(self):
-        """Read ECG at ~100 Hz continuously."""
+        """Read ECG at up to 860 Hz via ADS1115."""
         while self.running:
             try:
                 ecg_value, leads_off = self.ad8232.read()
@@ -94,29 +94,30 @@ class HealthcareAssistant:
                     self.lcd.update_ecg(ecg_value)
                     self.alert_manager.check_ecg(ecg_value, leads_off)
                 else:
-                    self.lcd.update_ecg(512)  # flat line when leads off
+                    self.lcd.update_ecg(512)   # flat line when leads off
 
             except Exception as e:
                 logger.error(f"ECG read error: {e}")
 
             time.sleep(self.ecg_interval)
 
-    # ── Lifecycle ────────────────────────────────────────────────────────────
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self):
         logger.info("Starting Healthcare Assistant...")
         self.running = True
 
-        # Initialize sensors
+        # Initialize sensors — warn but continue if one fails
         if not self.max30102.initialize():
-            logger.error("MAX30102 initialization failed!")
+            logger.error("MAX30102 init failed — check I2C wiring (0x57)")
         if not self.mlx90614.initialize():
-            logger.error("MLX90614 initialization failed!")
+            logger.error("MLX90614 init failed — check I2C wiring (0x5A)")
         if not self.ad8232.initialize():
-            logger.error("AD8232 initialization failed!")
+            logger.error("AD8232/ADS1115 init failed — check I2C wiring (0x48)")
 
         # Start LCD display
         self.lcd.start()
+        time.sleep(0.5)  # let display thread initialize fonts
 
         # Start sensor threads
         self.vitals_thread = threading.Thread(

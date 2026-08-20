@@ -1,113 +1,84 @@
 #!/usr/bin/env python3
 """
-AD8232 ECG Sensor via MCP3008 ADC over SPI
-ECG output -> MCP3008 CH0
-LO+  -> GPIO22 (Pin 15)   [moved from GPIO17 due to LCD35 conflict]
-LO-  -> GPIO27 (Pin 13)
+AD8232 ECG Sensor Driver
+Uses ADS1115 16-bit ADC over I2C (replaces MCP3008 SPI).
 
-MCP3008 SPI Wiring:
-  CLK  -> GPIO11/SCLK (Pin 23)
-  DOUT -> GPIO9/MISO  (Pin 21)
-  DIN  -> GPIO10/MOSI (Pin 19)
-  CS   -> GPIO5       (Pin 29)  [software CS, moved from CE0 due to LCD35]
+Wiring:
+  AD8232 OUTPUT -> ADS1115 A0
+  AD8232 LO+    -> GPIO22 (Pin 15)
+  AD8232 LO-    -> GPIO27 (Pin 13)
+  AD8232 3.3V   -> 3.3V
+  AD8232 GND    -> GND
+
+  ADS1115 SDA   -> GPIO2 (Pin 3)   shared I2C bus
+  ADS1115 SCL   -> GPIO3 (Pin 5)   shared I2C bus
+  ADS1115 ADDR  -> GND             address = 0x48
+  ADS1115 VDD   -> 3.3V
+  ADS1115 GND   -> GND
 """
 
-import time
 import logging
-
-try:
-    import spidev
-    SPI_AVAILABLE = True
-except ImportError:
-    SPI_AVAILABLE = False
-
-try:
-    import RPi.GPIO as GPIO
-    GPIO_AVAILABLE = True
-except ImportError:
-    GPIO_AVAILABLE = False
+from sensors.ads1115_sensor import ADS1115Sensor
 
 logger = logging.getLogger(__name__)
 
-# GPIO pins (BCM)
-LO_PLUS_PIN  = 22   # moved from 17 (LCD35 conflict)
-LO_MINUS_PIN = 27
-CS_PIN       = 5    # software CS for MCP3008
-
-ECG_CHANNEL  = 0    # MCP3008 channel
-
 
 class AD8232Sensor:
-    def __init__(self, spi_bus=0, spi_device=0, spi_speed=1350000):
-        self.spi_bus    = spi_bus
-        self.spi_device = spi_device
-        self.spi_speed  = spi_speed
-        self.spi        = None
+    def __init__(self):
+        self.adc         = ADS1115Sensor(i2c_bus=1, channel=0)
         self.initialized = False
 
+        # Basic signal stats
+        self._sample_count = 0
+        self._ecg_min      = 32767
+        self._ecg_max      = -32768
+
     def initialize(self):
-        if not SPI_AVAILABLE:
-            logger.error("spidev not available. Run: pip install spidev --break-system-packages")
-            return False
-        if not GPIO_AVAILABLE:
-            logger.error("RPi.GPIO not available. Run: pip install RPi.GPIO --break-system-packages")
-            return False
-        try:
-            # SPI setup
-            self.spi = spidev.SpiDev()
-            self.spi.open(self.spi_bus, self.spi_device)
-            self.spi.max_speed_hz = self.spi_speed
-            self.spi.mode         = 0b00
-            self.spi.no_cs        = True   # we drive CS manually
-
-            # GPIO setup
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(CS_PIN,       GPIO.OUT, initial=GPIO.HIGH)
-            GPIO.setup(LO_PLUS_PIN,  GPIO.IN)
-            GPIO.setup(LO_MINUS_PIN, GPIO.IN)
-
+        """Initialize ADS1115 ADC and GPIO."""
+        result = self.adc.initialize()
+        if result:
             self.initialized = True
-            logger.info("AD8232 via MCP3008 initialized.")
-            return True
-        except Exception as e:
-            logger.error(f"AD8232 init error: {e}")
-            return False
-
-    def _read_mcp3008(self, channel):
-        """Read 10-bit value from MCP3008 using software CS on GPIO5."""
-        GPIO.output(CS_PIN, GPIO.LOW)
-        cmd      = [0x01, (0x08 | channel) << 4, 0x00]
-        response = self.spi.xfer2(cmd)
-        GPIO.output(CS_PIN, GPIO.HIGH)
-        return ((response[1] & 0x03) << 8) | response[2]
-
-    def is_leads_off(self):
-        if not GPIO_AVAILABLE:
-            return False
-        return bool(GPIO.input(LO_PLUS_PIN) or GPIO.input(LO_MINUS_PIN))
+            logger.info("AD8232 ECG sensor initialized via ADS1115.")
+        else:
+            logger.error("AD8232 initialization failed — check ADS1115 wiring.")
+        return result
 
     def read(self):
-        """Returns (ecg_raw 0-1023, leads_off bool)."""
+        """
+        Read ECG sample.
+        Returns (ecg_normalized 0-1023, leads_off bool).
+        Compatible with existing main.py and display code.
+        """
         if not self.initialized:
             return None, True
-        try:
-            leads_off = self.is_leads_off()
-            ecg_value = self._read_mcp3008(ECG_CHANNEL)
-            return ecg_value, leads_off
-        except Exception as e:
-            logger.error(f"AD8232 read error: {e}")
-            return None, True
+
+        value, leads_off = self.adc.read_normalized()
+
+        if value is not None:
+            self._sample_count += 1
+            if value < self._ecg_min:
+                self._ecg_min = value
+            if value > self._ecg_max:
+                self._ecg_max = value
+
+        return value, leads_off
+
+    def read_voltage(self):
+        """Read ECG as voltage (0.0 – 3.3V)."""
+        return self.adc.read_voltage()
+
+    def read_raw(self):
+        """Read raw 16-bit ADS1115 value (-32768 to 32767)."""
+        return self.adc.read_raw()
+
+    def get_stats(self):
+        return {
+            'samples':   self._sample_count,
+            'min':       self._ecg_min,
+            'max':       self._ecg_max,
+            'amplitude': self._ecg_max - self._ecg_min,
+        }
 
     def cleanup(self):
-        if self.spi:
-            try:
-                self.spi.close()
-            except Exception:
-                pass
-        if GPIO_AVAILABLE:
-            try:
-                GPIO.cleanup([CS_PIN, LO_PLUS_PIN, LO_MINUS_PIN])
-            except Exception:
-                pass
+        self.adc.cleanup()
         logger.info("AD8232 cleaned up.")
